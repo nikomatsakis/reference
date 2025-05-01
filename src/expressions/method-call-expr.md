@@ -37,6 +37,45 @@ This requires a more complex lookup process than for other functions, since ther
 >
 > Given a method call on a receiver of type `&[u32; 3]`, the final candidate list would be `[&[u32;3], [u32;3], [u32]]`, where the final entry results from unsizing.
 
+* Walk a series of autoderef'd steps (details given below)
+  * Each step has a self type S
+  * Does S have an inherent `fn(self)` method?
+    * If yes, stop -> by value
+  * Are there [in-scope traits] (defined) `Trait` with a method that applies to `S`?
+    * If multiple, ambiguity error
+    * If exacly one, ...
+  * Does S have an inherent `fn(&self)` method?
+    * If yes, stop -> by ref
+  * Are there [in-scope traits] (defined) `Trait` with a method that applies to `&S`?
+    * If multiple, ambiguity error
+    * If exacly one, ...
+  * Does S have an inherent `fn(&mut self)` method?
+    * If yes, stop -> by mut ref
+  * Are there [in-scope traits] (defined) `Trait` with a method that applies to `&mut S`?
+    * If multiple, ambiguity error
+    * If exacly one, ...
+* A trait T  has a method `m` that applies to `S` if...
+  * the trait `T` is imported in scope
+  * the trait `T` defines defines a method `m` with self type
+  * you can unify `S` with the self type yielding `Self`
+  * and trait `T` is implemented for `Self`
+* A trait T is in-scope if ...
+* A method is inherent to the self type S if ...
+* for method call to be valid, you must first 
+
+Interesting example
+
+* `trait Foo { fn m(&self) }` implemented for `T`
+* `trait Bar { fn m(self) }` implemented for `&T`
+  * what we do in the code:
+    * for each candidate:
+      * make a fresh inference variable `?Self` and we compute the self type from the method
+        * e.g., `&?Self_0` for trait `Foo` and `?Self_1` for trait `Bar`
+      * attempt to unify the self type with the "step" type
+        * if step type is `&X` then `&X = &?Self_0`, yielding `?Self_0 = X`
+          * then we would have to prove `X: Trait`
+* you want ambiguity
+
 ## NOTES
 
 * Assemble a list of candidates `[(T, MethodId)]` by walking the steps, each step has a self type `S`
@@ -75,7 +114,8 @@ enum Candidate {
   Extension(TraitId, MethodId),
 }
 ```
-
+>
+> XXX give an example of calling `into_bytes` on `Rc<String>` and show how it succeeds to desugar and results in a later error. 
 
 ## Determining candidate methods
 
