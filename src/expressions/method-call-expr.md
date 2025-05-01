@@ -22,16 +22,82 @@ r[expr.method.autoref-deref]
 When looking up a method call, the receiver may be automatically dereferenced or borrowed in order to call a method.
 This requires a more complex lookup process than for other functions, since there may be a number of possible methods to call.
 
-The following procedure is used:
-
 ## Determining candidate types
+
+* Beginning with the type `T` of the receiver, assemble a list of initial list of candidate types `C` by repeatedly
+  * using the same rules as the [dereference] operator, determine the target type
+* If the final candidate in `C` can be [unsized], extend candidate list `C` with result of unsizing coercion
+
+> [!EXAMPLE]
+>
+> Given a method call on a receiver of type `&Box<Rc<u32>>`, the final candidate list would be `[&Box<Rc<u32>>>, Box<Rc<u32>>, Rc<u32>, u32]`:
+>
+> * Dereferencing `&` and `Box` results uses built-in operator rules
+> * The type `u32` is the result of `<Rc<u32> as Deref>::Target`.
+>
+> Given a method call on a receiver of type `&[u32; 3]`, the final candidate list would be `[&[u32;3], [u32;3], [u32]]`, where the final entry results from unsizing.
+
+## NOTES
+
+* Assemble a list of candidates `[(T, MethodId)]` by walking the steps, each step has a self type `S`
+  * Add inherent candidates based on self type `S`
+    * e.g. if S = a struct `Foo`, and `Foo` has an inherent method `fn process(&self)`, we would add a candidate `(&Foo, <Foo>::process)`
+  * Add extension candidates 
+* Walk the steps, each step has a self type `S`:
+  * Is there a inherent candidate that applies to receiver type `S`?
+    * If so, take it with no adjustment
+  * Is there an extension candidate `(TraitId, MethodId)` where `S: TraitId` holds? ("trait evaluation")
+    * If so, take it with no adjustment
+  * Is there a candidate that applies to receiver type `&S`?
+    * If so, take it with adjustment: autoref
+  * Are there extension candidates `(TraitId, MethodId)` where `&S: TraitId` holds? ("trait evaluation")
+    * If multiple, report ambiguity error
+    * If exactly one, take it with adjustment: autoref
+  * Is there a candidate that applies to receiver type `&mut S`?
+    * If so, take it with adjustment: automutref
+  * Is there an extension candidate `(TraitId, MethodId)` where `&mut S: TraitId` holds? ("trait evaluation")
+    * If so, take it with adjustment: automutref
+  * For `*mut T`, search `*const T`
+
+> [!EXAMPLE]
+>
+> Calling `s.as_str()` and `fn as_str(&self)`
+> * `Rc<String>` -- `[Rc<String>, String]` -- steps
+> * Candidate list: `[(&String, String::as_str)]`
+> * Resulting choice would be `(&String, String::as_str)` with adjustment of autoref
+> * "Compiled" to `String::as_str(&*s)`
+>   * the `*` comes from the fact that this was the second step (1 deref)
+>   * the `&` comes from the autoref adjustment
+>
+```rust
+enum Candidate {
+  Inherent(SelfType, MethodId),
+  Extension(TraitId, MethodId),
+}
+```
+
+
+## Determining candidate methods
+
+This list of candidate types is then converted to a list of candidate methods.
+For each step, the candidate type is used to determine what searches to perform:
+
+* For a struct, enum, foreign type, or various simpler types (listed below)
+  there is a search for inherent impl candidates for the type.
+* For a type param, there's a search for inherent candidates on the param.
+* For a trait object, there is first a search for inherent candidates for
+  the trait (for example in `impl Trait` blocks), then inherent impl
+  candidates for the trait object itself (for example found in `impl dyn Trait`
+  blocks).
+
+## OLDER
 
 First, a list of "candidate types" is assembled.
 
 These types are found by taking the receiver type and iterating, following either:
 
 * The built-in [dereference]; or
-* `<T as Receiver>::Target`
+<!-- * `<T as Receiver>::Target`-->
 
 to the next type. (If a step involved following the `Receiver` target, we also
 note whether it would have been reachable by following `<T as
@@ -182,6 +248,7 @@ There are a few details not considered in this overview:
 
 ## Net results
 
+> [!NOTE]
 > The lookup is done for each type in order, which can occasionally lead to surprising results.
 > The below code will print "In trait impl!", because `&self` methods are looked up first, the trait method is found before the struct's `&mut self` method is found.
 >
@@ -235,7 +302,9 @@ fn f() {
 }
 ```
 
-> **Edition differences**: Before the 2021 edition, during the search for visible methods, if the candidate receiver type is an [array type], methods provided by the standard library [`IntoIterator`] trait are ignored.
+r[expr.method.edition2021]
+> [!EDITION-2021]
+> Before the 2021 edition, during the search for visible methods, if the candidate receiver type is an [array type], methods provided by the standard library [`IntoIterator`] trait are ignored.
 >
 > The edition used for this purpose is determined by the token representing the method name.
 >
